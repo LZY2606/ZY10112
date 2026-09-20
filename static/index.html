@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair-wise GSB</title>
+<style>
+:root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; background: #f6f7f9; color: #17202a; }
+header { padding: 20px 28px; background: #10243e; color: white; }
+h1 { margin: 0 0 4px; font-size: 22px; }
+small { color: #b8c7dc; }
+main { padding: 20px 28px; display: grid; grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr); gap: 18px; }
+.card { background: white; border: 1px solid #d9dee7; border-radius: 10px; padding: 16px; box-shadow: 0 1px 2px #0001; }
+.card h2 { margin: 0 0 12px; font-size: 16px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+button, select, input { font: inherit; border-radius: 6px; border: 1px solid #b6bfcc; padding: 6px 9px; background: white; }
+button { cursor: pointer; background: #1d5fd1; color: white; border-color: #1d5fd1; }
+button.secondary { background: white; color: #1d3557; }
+button.danger { background: #b42318; border-color: #b42318; }
+.candidate { border: 1px solid #d0d7e2; border-radius: 8px; padding: 12px; margin: 10px 0; }
+.candidate.reliable { border-left: 5px solid #168a4a; }
+.candidate.conditional { border-left: 5px solid #d97706; }
+.candidate.underdetermined { border-left: 5px solid #b42318; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(90px, 1fr)); gap: 8px; font-size: 13px; }
+.metric { background: #f3f6fa; padding: 8px; border-radius: 6px; }
+.metric b { display: block; font-size: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 8px; }
+th, td { border-bottom: 1px solid #e5e9f0; padding: 5px 6px; text-align: left; white-space: nowrap; }
+tr.rejected { color: #8a3b35; background: #fff7f6; }
+.warn { color: #9a5b00; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+pre { white-space: pre-wrap; word-break: break-word; background: #0b1b2f; color: #d8e7ff; border-radius: 8px; padding: 10px; max-height: 340px; overflow: auto; font-size: 11px; }
+.badge { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 11px; background: #e8eef9; }
+.badge.good { background: #dcf5e7; color: #116534; }
+.badge.warn { background: #fff0d6; color: #8a4b00; }
+.badge.bad { background: #ffe3df; color: #8d241b; }
+details { margin-top: 8px; }
+.pickrow button { padding: 2px 6px; font-size: 11px; }
+@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pair-wise GSB 离线拾取分配与定位</h1>
+  <small>坐标单位 km；到时、残差、钟差单位 s；深度固定 0 km；求解单线程、BTree/ID 稳定排序。</small>
+</header>
+<main>
+<section class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2>候选事件（每次至少保留 3 个）</h2>
+    <span id="batch" class="badge"></span>
+  </div>
+  <div id="candidates">加载中…</div>
+</section>
+<aside class="card">
+  <h2>操作</h2>
+  <div class="row">
+    <label>时钟版本 <select id="clockVersion"><option>clock-v1</option><option>clock-v2</option></select></label>
+    <label>范围 <select id="scopeMode"><option value="all">全部事件</option><option value="one">仅指定事件</option></select></label>
+    <input id="scopeEvent" placeholder="event-001" style="display:none">
+    <button onclick="recompute()">显式重算</button>
+  </div>
+  <h2 style="margin-top:18px">导入 JSONL</h2>
+  <textarea id="jsonl" rows="8" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"type":"pick", ...}'></textarea>
+  <div class="row" style="margin-top:8px"><button onclick="importJsonl()">按内容哈希导入</button><button class="secondary" onclick="loadBatches()">批次</button></div>
+  <h2 style="margin-top:18px">证据与日志</h2>
+  <h2>历史运行与假设</h2>
+  <div id="history" class="row"></div>
+  <div class="row"><button class="secondary" onclick="loadLogs()">查看操作日志</button></div>
+  <pre id="side">尚无输出</pre>
+</aside>
+</main>
+<script>
+let state = null;
+function fmt(value, digits=3) { return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—'; }
+function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function api(path, method='GET', body) {
+  const response = await fetch(path, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+async function refresh() {
+  state = await api('/api/state');
+  render();
+  renderHistory();
+  const batches = await api('/api/batches');
+  document.getElementById('batch').textContent = `${batches.length} batch / ${state.picks.length} picks`;
+}
+function badge(status) {
+  const cls = status === 'reliable' ? 'good' : status === 'conditional' ? 'warn' : 'bad';
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+function pickTable(candidate, accepted=true) {
+  const picks = accepted ? candidate.accepted_picks : candidate.rejected_picks;
+  if (!picks.length) return accepted ? '<p>无接受拾取</p>' : '';
+  return `<table><thead><tr><th>拾取</th><th>台站</th><th>相位</th><th>残差 s</th><th>χ²贡献</th><th>操作</th></tr></thead><tbody>${picks.map(p => `
+    <tr class="${accepted?'':'rejected'}">
+      <td>${esc(p.pick_id)}${p.locked?' 🔒':''}</td><td>${esc(p.station_id)}</td><td>${p.phase}</td>
+      <td>${Number.isFinite(p.residual_seconds)?fmt(p.residual_seconds):'—'}</td>
+      <td>${Number.isFinite(p.contribution)?fmt(p.contribution,2):'—'}</td>
+      <td class="pickrow"><button class="secondary" onclick="setPick('${esc(p.pick_id)}','locked','${esc(candidate.event_key)}')">锁定</button>
+      <button class="danger" onclick="setPick('${esc(p.pick_id)}','noise')">噪声</button></td>
+    </tr>${!accepted && p.reason ? `<tr class="rejected"><td colspan="6" class="warn">剔除原因：${esc(p.reason)}</td></tr>`:''}`).join('')}</tbody></table>`;
+}
+function render() {
+  const grouped = Object.groupBy ? Object.groupBy(state.candidates, c => c.event_key) : {};
+  document.getElementById('candidates').innerHTML = Object.entries(grouped).map(([event, candidates]) => `<div><h2>${event}</h2>${candidates.map((c, index) => `
+    <div class="card candidate ${c.status}">
+      <div class="row" style="justify-content:space-between"><strong>Rank ${c.rank} ${badge(c.status)} score=${fmt(c.score,2)}</strong><span class="badge">候选 ${index+1}</span></div>
+      <div class="grid" style="margin:10px 0">
+        <div class="metric"><b>x</b>${fmt(c.x_km)} km</div><div class="metric"><b>y</b>${fmt(c.y_km)} km</div>
+        <div class="metric"><b>origin</b>${esc(c.origin_time || '不可分辨')}</div><div class="metric"><b>方位空档</b>${fmt(c.azimuth_gap_deg,1)}°</div>
+        <div class="metric"><b>台站</b>${c.station_count}</div><div class="metric"><b>P/S</b>${c.p_count}/${c.s_count}</div>
+        <div class="metric"><b>RMS</b>${fmt(c.rms_residual_seconds)} s</div><div class="metric"><b>深度</b>${fmt(c.depth_km)} km</div>
+      </div>
+      <details ${index===0?'open':''}><summary>${c.accepted_picks.length} 个接受、${c.rejected_picks.length} 个被追溯剔除；协方差/警告</summary>
+        ${pickTable(c,true)}<details><summary>被剔除或暂不支持的拾取</summary>${pickTable(c,false)}</details>
+        <p class="warn">${(c.warnings||[]).map(esc).join(' · ') || 'no_warnings'}</p>
+        <pre>${esc(JSON.stringify({labels:c.covariance_labels, covariance:c.covariance, clock_estimates:c.clock_estimates}, null, 2))}</pre>
+      </details>
+      <div class="row" style="margin-top:8px">
+        <button class="secondary" onclick="freeze('${esc(c.candidate_id)}')">冻结为假设</button>
+        <button class="secondary" onclick="duplicateHypothesis('${esc(c.candidate_id)}')">复制为并行假设</button>
+      </div>
+    </div>`).join('')}</div>`).join('');
+}
+async function setPick(id, status, event) {
+  await api('/api/picks/status','POST',{pick_id:id,status,locked_event:status==='locked'?event:null});
+  await refresh();
+}
+async function recompute() {
+  const mode = document.getElementById('scopeMode').value;
+  const scope = mode === 'one' ? [document.getElementById('scopeEvent').value || 'event-001'] : [];
+  const result = await api('/api/solve','POST',{clock_version:document.getElementById('clockVersion').value, scope, rationale:'web_explicit_recompute'});
+  document.getElementById('side').textContent = JSON.stringify(result,null,2);
+  await refresh();
+}
+async function freeze(candidateId) {
+  const label = prompt('假设标签', `parallel-${candidateId.slice(0,8)}`);
+  if (!label) return;
+  const result = await api('/api/freeze','POST',{candidate_id: candidateId, label});
+  document.getElementById('side').textContent = JSON.stringify(result,null,2);
+}
+async function duplicateHypothesis(candidateId) {
+  const freezeResult = await api('/api/freeze','POST',{candidate_id:candidateId, label:`branch-${candidateId.slice(0,8)}`});
+  const result = await api('/api/hypotheses/duplicate','POST',{hypothesis_id:freezeResult.hypothesis_id, label:'parallel-working-copy'});
+  document.getElementById('side').textContent = JSON.stringify(result,null,2);
+  await refresh();
+}
+async function importJsonl() {
+  const result = await api('/api/import','POST',{source_name:'web-paste', content:document.getElementById('jsonl').value});
+  document.getElementById('side').textContent = JSON.stringify(result,null,2);
+  await refresh();
+}
+async function loadBatches(){ document.getElementById('side').textContent = JSON.stringify(await api('/api/batches'),null,2); }
+async function loadLogs(){ document.getElementById('side').textContent = JSON.stringify(await api('/api/logs'),null,2); }
+function renderHistory() {
+  const runs = (state.runs || []).map(run => `<button class="secondary" onclick="loadRun('${run.run_id}')">${run.clock_version} / ${run.rationale}</button>`).join('');
+  const hypotheses = (state.hypotheses || []).map(h => `<span class="badge">${h.event_key}: ${h.label} (${h.active_clock_version}) <button class="secondary" onclick="recomputeHypothesis('${h.hypothesis_id}')">仅重算副本</button></span>`).join('');
+  document.getElementById('history').innerHTML = runs + hypotheses;
+}
+async function loadRun(runId) {
+  state.candidates = await api(`/api/run?id=${encodeURIComponent(runId)}`);
+  render();
+}
+async function recomputeHypothesis(hypothesisId) {
+  const clockVersion = document.getElementById('clockVersion').value;
+  const result = await api('/api/hypotheses/recompute','POST',{hypothesis_id:hypothesisId, clock_version:clockVersion});
+  document.getElementById('side').textContent = JSON.stringify(result,null,2);
+  await refresh();
+}
+document.getElementById('scopeMode').onchange = e => document.getElementById('scopeEvent').style.display = e.target.value === 'one' ? 'block' : 'none';
+refresh().catch(error => document.getElementById('candidates').textContent = error);
+</script>
+</body>
+</html>
