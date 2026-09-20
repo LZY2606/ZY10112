@@ -1,0 +1,14 @@
+[package]
+name = "pairwise_gsb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140" }
+sha2 = "0.10.9"
+
+[profile.release]
+panic = "abort"
+lto = true

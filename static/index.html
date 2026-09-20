@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pair-wise GSB 离线拾取分配</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#f6f7f9; color:#17202a; }
+    body { margin:0; }
+    header { padding:18px 24px; background:#102a43; color:white; }
+    header h1 { margin:0 0 4px; font-size:20px; }
+    header p { margin:0; color:#bcccdc; font-size:13px; }
+    main { padding:18px 24px 40px; display:grid; gap:16px; }
+    .card { background:white; border:1px solid #d9e2ec; border-radius:10px; padding:14px; box-shadow:0 1px 2px #102a4312; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    button, select, input { font:inherit; }
+    button { border:1px solid #486581; background:#f0f4f8; border-radius:6px; padding:5px 9px; cursor:pointer; }
+    button.primary { background:#0b69a3; color:white; border-color:#0b69a3; }
+    button.danger { color:#861b1b; border-color:#ad7b7b; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid #e6edf3; padding:6px 7px; text-align:left; vertical-align:top; }
+    th { background:#f0f4f8; position:sticky; top:0; }
+    .muted { color:#627d98; font-size:12px; }
+    .status-located { color:#0a6b3b; font-weight:700; }
+    .status-degraded { color:#9a6200; font-weight:700; }
+    .status-underdetermined, .status-contradiction { color:#9b1c1c; font-weight:700; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#0b1f33; color:#d9e2ec; padding:10px; border-radius:8px; max-height:280px; overflow:auto; font-size:11px; }
+    .pill { display:inline-block; padding:1px 7px; border-radius:99px; background:#e6edf3; margin-right:4px; }
+    @media (max-width: 900px) { .grid2 { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Pair-wise GSB：离线 P/S 拾取分配、时钟校正与震源定位</h1>
+  <p>确定性求解器 · SQLite 追加记录 · 多候选与逐拾取贡献 · 不访问外部地图或目录</p>
+</header>
+<main>
+  <section class="card row">
+    <strong>并行震源假设</strong>
+    <div id="tabs"></div>
+    <select id="sets"></select>
+    <button id="loadSet">读取冻结候选集</button>
+    <button class="primary" id="recompute">用当前校正重算</button>
+    <span class="muted">旧候选集不覆盖，可随时回放。</span>
+  </section>
+  <section class="card">
+    <h2>候选事件</h2>
+    <div id="events" class="grid2"></div>
+  </section>
+  <section class="card">
+    <h2>拾取与操作</h2>
+    <div class="row" style="margin-bottom:10px">
+      <input id="correctionName" placeholder="新版本名，例如 v2-st01" style="width:220px">
+      <input id="offsetStation" placeholder="台站" style="width:90px">
+      <input id="offsetValue" placeholder="偏差秒" style="width:100px">
+      <button id="newCorrection">创建分段校正（未选台站为 0）</button>
+    </div>
+    <div id="picks"></div>
+  </section>
+  <section class="card grid2">
+    <div><h2>被剔除拾取</h2><div id="rejected"></div></div>
+    <div><h2>操作日志 / 哈希</h2><div id="log"></div></div>
+  </section>
+  <section class="card">
+    <h2>原始状态 JSON</h2>
+    <pre id="raw"></pre>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
